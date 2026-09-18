@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flappy Liam</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Segoe UI', sans-serif;
+    user-select: none;
+  }
+  #wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  canvas {
+    border: 3px solid #FFD700;
+    border-radius: 10px;
+    display: block;
+    image-rendering: pixelated;
+    cursor: pointer;
+    max-width: 100vw;
+  }
+  #hud {
+    display: flex;
+    gap: 32px;
+    color: #fff;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+  }
+  #hud span b { color: #FFD700; font-weight: 600; }
+  #hint { color: #aaa; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="wrapper">
+  <canvas id="c" width="400" height="550"></canvas>
+  <div id="hud">
+    <span>Score: <b id="score">0</b></span>
+    <span>Best: <b id="best">0</b></span>
+  </div>
+  <div id="hint">Space / Tap to flap</div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const PIPE_W = 56, GAP = 138, SPEED = 2.3, GRAV = 0.38, JUMP = -7.4, SZ = 52;
+
+let bird, pipes, score, best = 0, state, tick = 0;
+
+function makePipe() {
+  const top = 90 + Math.random() * (H - 70 - GAP - 90);
+  return { x: W + 20, top, bottom: top + GAP, scored: false };
+}
+
+function init() {
+  bird = { x: 90, y: H / 2 - 40, vy: 0 };
+  pipes = [{ ...makePipe(), x: W + 100 }];
+  score = 0; state = 'idle';
+  document.getElementById('score').textContent = 0;
+}
+
+// ── SKY / GROUND ──────────────────────────────────────────
+function drawSky() {
+  ctx.fillStyle = '#4A90D9'; ctx.fillRect(0, 0, W, H - 65);
+  ctx.fillStyle = '#6BAED6'; ctx.fillRect(0, H * 0.5, W, H - 65 - H * 0.5);
+}
+function drawGround() {
+  ctx.fillStyle = '#7A5C14'; ctx.fillRect(0, H - 65, W, 65);
+  ctx.fillStyle = '#4E8020'; ctx.fillRect(0, H - 65, W, 18);
+  ctx.fillStyle = '#5FA025';
+  for (let i = 0; i < W; i += 20) ctx.fillRect(i, H - 68, 14, 8);
+}
+function drawClouds(t) {
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  [[40,50],[180,75],[310,42],[120,115],[360,88]].forEach(([bx, by], i) => {
+    const cx = ((bx - t * 0.28 * (0.4 + i * 0.13)) % (W + 140) + W + 140) % (W + 140) - 70;
+    ctx.beginPath();
+    ctx.arc(cx, by, 20, 0, Math.PI * 2);
+    ctx.arc(cx + 22, by - 8, 16, 0, Math.PI * 2);
+    ctx.arc(cx + 42, by, 18, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+// ── PIPES ──────────────────────────────────────────────────
+function drawPipe(p) {
+  ctx.fillStyle = '#5DBB3F'; ctx.fillRect(p.x, 0, PIPE_W, p.top); ctx.fillRect(p.x, p.bottom, PIPE_W, H - 65 - p.bottom);
+  ctx.fillStyle = '#3A8A25'; ctx.fillRect(p.x + PIPE_W - 7, 0, 7, p.top); ctx.fillRect(p.x + PIPE_W - 7, p.bottom, 7, H - 65 - p.bottom);
+  ctx.fillStyle = '#4CAF28'; ctx.fillRect(p.x - 6, p.top - 24, PIPE_W + 12, 24); ctx.fillRect(p.x - 6, p.bottom, PIPE_W + 12, 24);
+  ctx.fillStyle = '#3A8A25'; ctx.fillRect(p.x + PIPE_W + 6, p.top - 24, 6, 24); ctx.fillRect(p.x + PIPE_W + 6, p.bottom, 6, 24);
+}
+
+// ── LIAM PIXEL SPRITE (16x18) ─────────────────────────────
+// Colors:
+// H = dark brown hair #5C3A1E
+// L = light brown highlight #9B6B35
+// S = skin #E8C4A0
+// D = shadow skin #C9A078
+// G = glasses frame #111111
+// W = whites of eyes #F0EDE8
+// E = eye/pupil #2A1A0A
+// N = nose shadow #D0A87A
+// M = mouth #C07060
+// C = hoodie grey #B0B8B0
+// _ = transparent
+
+const _ = 0;
+const pal = {
+  H:'#5C3A1E', L:'#9B6B35', S:'#E8C4A0', D:'#C9A078',
+  G:'#111111', W:'#F0EDE8', E:'#2A1A0A', N:'#D0A87A',
+  M:'#C07060', C:'#B0B8B0'
+};
+
+// 16 wide x 18 tall — curly hair top, glasses across eyes, smile, hoodie
+const sprite = [
+// row 0 — curly hair top
+[_,'H','L','H','L','H','H','L','H','L','H','H','L','H',_,_],
+// row 1 — more curls
+['H','L','H','H','L','H','H','H','H','L','H','H','H','L','H',_],
+// row 2 — curls spread
+[_,'H','H','L','H','H','H','H','H','H','L','H','H','H',_,_],
+// row 3 — hairline over forehead
+[_,'H','H','S','S','S','S','S','S','S','S','S','H','H',_,_],
+// row 4 — forehead skin
+[_,_,'S','S','S','S','S','S','S','S','S','S','S',_,_,_],
+// row 5 — top glasses bar
+[_,_,'G','G','G','G','G','G','G','G','G','G','G',_,_,_],
+// row 6 — eyes behind glasses
+[_,_,'G','W','W','E','W','_','G','W','E','W','G',_,_,_],
+// row 7 — eye lower
+[_,_,'G','W','W','W','W','_','G','W','W','W','G',_,_,_],
+// row 8 — bottom glasses bar
+[_,_,'G','G','G','G','G','G','G','G','G','G','G',_,_,_],
+// row 9 — cheeks / nose area
+[_,_,'S','S','S','N','S','S','N','S','S','S','S',_,_,_],
+// row 10 — mid face
+[_,_,'S','S','S','S','S','S','S','S','S','S','S',_,_,_],
+// row 11 — slight smile
+[_,_,'S','S','M','S','S','S','S','S','M','S','S',_,_,_],
+// row 12 — smile curve
+[_,_,'S','S','S','M','M','M','M','M','S','S','S',_,_,_],
+// row 13 — chin
+[_,_,'S','S','S','S','S','S','S','S','S','S','S',_,_,_],
+// row 14 — jaw taper
+[_,_,_,'D','S','S','S','S','S','S','S','D',_,_,_,_],
+// row 15 — neck
+[_,_,_,_,'S','S','S','S','S','S',_,_,_,_,_,_],
+// row 16 — hoodie collar
+[_,_,_,'C','C','C','C','C','C','C','C',_,_,_,_,_],
+// row 17 — hoodie body
+[_,_,'C','C','C','C','C','C','C','C','C','C',_,_,_,_],
+];
+
+function drawLiam(ox, oy, sz) {
+  const s = sz / 16;
+  sprite.forEach((row, ry) => {
+    row.forEach((v, rx) => {
+      if (!v || v === '_') return;
+      ctx.fillStyle = pal[v];
+      ctx.fillRect(ox + rx * s, oy + ry * s, s + 0.6, s + 0.6);
+    });
+  });
+}
+
+function drawBird() {
+  ctx.save();
+  ctx.translate(bird.x + SZ / 2, bird.y + SZ / 2);
+  const tilt = Math.min(Math.max(bird.vy * 3, -28), 65);
+  ctx.rotate(tilt * Math.PI / 180);
+  drawLiam(-SZ / 2, -SZ / 2, SZ);
+  ctx.restore();
+}
+
+// ── OVERLAYS ───────────────────────────────────────────────
+function panel(x, y, w, h) {
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  roundRect(x, y, w, h, 12);
+  ctx.fill();
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawIdle() {
+  panel(W / 2 - 130, H / 2 - 65, 260, 90);
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 26px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('FLAPPY LIAM', W / 2, H / 2 - 24);
+  ctx.fillStyle = '#ddd'; ctx.font = '15px sans-serif';
+  ctx.fillText('Tap or press Space to start', W / 2, H / 2 + 8);
+}
+
+function drawDead() {
+  panel(W / 2 - 115, H / 2 - 70, 230, 110);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('Game Over', W / 2, H / 2 - 28);
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 18px sans-serif';
+  ctx.fillText(`Score: ${score}`, W / 2, H / 2 + 2);
+  ctx.fillStyle = '#bbb'; ctx.font = '13px sans-serif';
+  ctx.fillText('Tap or Space to retry', W / 2, H / 2 + 26);
+}
+
+// ── COLLISION ──────────────────────────────────────────────
+function collides(p) {
+  const bx = bird.x + 6, by = bird.y + 6, bw = SZ - 12, bh = SZ - 12;
+  return bx + bw > p.x && bx < p.x + PIPE_W && (by < p.top || by + bh > p.bottom);
+}
+function die() { state = 'dead'; bird.vy = -5; }
+
+// ── MAIN LOOP ──────────────────────────────────────────────
+function loop() {
+  requestAnimationFrame(loop);
+  tick++;
+  drawSky();
+  drawClouds(tick);
+
+  if (state === 'idle') {
+    drawGround();
+    bird.y = H / 2 - 40 + Math.sin(tick * 0.05) * 10;
+    drawBird();
+    drawIdle();
+    return;
+  }
+
+  bird.vy += GRAV;
+  bird.y += bird.vy;
+
+  if (pipes[pipes.length - 1].x < W - 220) pipes.push(makePipe());
+  pipes = pipes.filter(p => p.x > -PIPE_W - 30);
+
+  pipes.forEach(p => {
+    if (state === 'play') p.x -= SPEED;
+    drawPipe(p);
+    if (!p.scored && p.x + PIPE_W < bird.x) {
+      p.scored = true; score++;
+      document.getElementById('score').textContent = score;
+      if (score > best) { best = score; document.getElementById('best').textContent = best; }
+    }
+    if (state === 'play' && collides(p)) die();
+  });
+
+  drawGround();
+  drawBird();
+
+  if (state === 'play' && (bird.y + SZ > H - 65 || bird.y < 0)) die();
+  if (state === 'dead') drawDead();
+}
+
+// ── INPUT ──────────────────────────────────────────────────
+function flap() {
+  if (state === 'idle') { state = 'play'; bird.vy = JUMP; return; }
+  if (state === 'dead') { init(); state = 'play'; bird.vy = JUMP; return; }
+  bird.vy = JUMP;
+}
+
+canvas.addEventListener('click', flap);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); flap(); }, { passive: false });
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); flap(); }
+});
+
+init();
+loop();
+</script>
+</body>
+</html>
